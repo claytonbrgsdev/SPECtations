@@ -7,6 +7,7 @@ import pyqtgraph as pg
 import json
 import os
 import datetime
+import time
 from PySide6 import QtCore, QtWidgets, QtGui
 from PySide6.QtCore import Qt, QTimer, QBuffer
 from PySide6.QtGui import QColor, QPalette, QImage, QPainter, QAction
@@ -49,6 +50,9 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
         
         # List to store visualization panels
         self.viz_panels = []
+        
+        # Initialize particles data for visualization
+        self.particles_data = {}
         self.current_num_panels = 2  # Default starting with 2 panels
         
         # Dictionary of visualization types mapped to setup functions
@@ -316,6 +320,28 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
         self.frequency_alpha_check.setChecked(False)
         self.frequency_alpha_check.stateChanged.connect(self.update_waveform_settings)
         waveform_layout.addRow("", self.frequency_alpha_check)
+        
+        # Particles visualization effect
+        self.particles_check = QtWidgets.QCheckBox("Particles Visualization")
+        self.particles_check.setChecked(False)
+        self.particles_check.stateChanged.connect(self.update_waveform_settings)
+        waveform_layout.addRow("", self.particles_check)
+        
+        # Particles density control
+        self.particles_density_slider = QtWidgets.QSlider(Qt.Horizontal)
+        self.particles_density_slider.setMinimum(10)
+        self.particles_density_slider.setMaximum(100)
+        self.particles_density_slider.setValue(50)
+        self.particles_density_slider.valueChanged.connect(self.update_waveform_settings)
+        waveform_layout.addRow("Particles Density:", self.particles_density_slider)
+        
+        # Particles speed control
+        self.particles_speed_slider = QtWidgets.QSlider(Qt.Horizontal)
+        self.particles_speed_slider.setMinimum(1)
+        self.particles_speed_slider.setMaximum(10)
+        self.particles_speed_slider.setValue(5)
+        self.particles_speed_slider.valueChanged.connect(self.update_waveform_settings)
+        waveform_layout.addRow("Particles Speed:", self.particles_speed_slider)
         
         # Add the waveform tab
         self.settings_tabs.addTab(waveform_tab, "Waveform")
@@ -718,8 +744,135 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
                     if hasattr(waveform_plot, 'waveform_curve'):
                         waveform_curve = waveform_plot.waveform_curve
                         
+                        # Check for particles visualization effect
+                        if hasattr(self, 'particles_check') and self.particles_check.isChecked():
+                            # Remove previous particle plots
+                            for key in list(panel['plots'].keys()):
+                                if key.startswith('particle_'):
+                                    waveform_plot.getPlotItem().removeItem(panel['plots'][key])
+                                    del panel['plots'][key]
+                            
+                            # Hide main waveform curve
+                            waveform_curve.hide()
+                            
+                            # Initialize panel's particles if needed
+                            panel_id = str(id(panel))
+                            if panel_id not in self.particles_data:
+                                self.particles_data[panel_id] = {
+                                    'particles': [],
+                                    'last_update': time.time()
+                                }
+                            
+                            # Get particle settings
+                            num_particles = self.particles_density_slider.value()
+                            particle_speed = self.particles_speed_slider.value() / 5.0  # Range 0.2-2.0
+                            
+                            # Get current time for animation
+                            current_time = time.time()
+                            dt = current_time - self.particles_data[panel_id]['last_update']
+                            self.particles_data[panel_id]['last_update'] = current_time
+                            
+                            # Generate or update particles
+                            if not self.particles_data[panel_id]['particles'] or len(self.particles_data[panel_id]['particles']) != num_particles:
+                                # Create new particles
+                                self.particles_data[panel_id]['particles'] = []
+                                for i in range(num_particles):
+                                    # Random position along the waveform
+                                    x_pos = np.random.randint(0, len(waveform_data))
+                                    # Y position based on waveform value at that point
+                                    y_pos = waveform_data[x_pos] if x_pos < len(waveform_data) else 0
+                                    # Random velocity
+                                    vx = (np.random.random() - 0.5) * particle_speed
+                                    vy = (np.random.random() - 0.5) * particle_speed
+                                    # Random size
+                                    size = np.random.randint(2, 8)
+                                    # Color based on position (phase shift across spectrum)
+                                    color_val = (i / num_particles) * 360
+                                    color = pg.mkColor(color_val, 1.0, 0.8, mode='hsv')
+                                    
+                                    self.particles_data[panel_id]['particles'].append({
+                                        'x': x_pos,
+                                        'y': y_pos,
+                                        'vx': vx,
+                                        'vy': vy,
+                                        'size': size,
+                                        'color': color,
+                                        'life': 1.0  # Full life
+                                    })
+                            else:
+                                # Update existing particles
+                                particles_to_remove = []
+                                for i, particle in enumerate(self.particles_data[panel_id]['particles']):
+                                    # Get audio amplitude at this position to influence particle
+                                    x_idx = int(particle['x']) % len(waveform_data)
+                                    audio_influence = abs(waveform_data[x_idx]) * 5.0
+                                    
+                                    # Update position with velocity and audio influence
+                                    particle['x'] += particle['vx'] * (1 + audio_influence) * 10 * dt * particle_speed
+                                    particle['y'] += particle['vy'] * (1 + audio_influence) * 10 * dt * particle_speed
+                                    
+                                    # Add some turbulence based on audio data
+                                    particle['vx'] += (np.random.random() - 0.5) * audio_influence * 0.5
+                                    particle['vy'] += (np.random.random() - 0.5) * audio_influence * 0.5
+                                    
+                                    # Limit velocity
+                                    max_vel = 5 * particle_speed
+                                    particle['vx'] = max(-max_vel, min(max_vel, particle['vx']))
+                                    particle['vy'] = max(-max_vel, min(max_vel, particle['vy']))
+                                    
+                                    # Decrease life
+                                    particle['life'] -= 0.01 * particle_speed
+                                    
+                                    # Remove dead particles
+                                    if particle['life'] <= 0:
+                                        particles_to_remove.append(i)
+                                    elif particle['x'] < 0 or particle['x'] >= len(waveform_data) or abs(particle['y']) > 1.0:
+                                        particles_to_remove.append(i)
+                                
+                                # Remove dead particles (in reverse order to avoid index issues)
+                                for i in sorted(particles_to_remove, reverse=True):
+                                    del self.particles_data[panel_id]['particles'][i]
+                                
+                                # Add new particles to replace removed ones
+                                for i in range(len(particles_to_remove)):
+                                    x_pos = np.random.randint(0, len(waveform_data))
+                                    y_pos = waveform_data[x_pos] if x_pos < len(waveform_data) else 0
+                                    vx = (np.random.random() - 0.5) * particle_speed
+                                    vy = (np.random.random() - 0.5) * particle_speed
+                                    size = np.random.randint(2, 8)
+                                    color_val = (np.random.random()) * 360
+                                    color = pg.mkColor(color_val, 1.0, 0.8, mode='hsv')
+                                    
+                                    self.particles_data[panel_id]['particles'].append({
+                                        'x': x_pos,
+                                        'y': y_pos,
+                                        'vx': vx,
+                                        'vy': vy,
+                                        'size': size,
+                                        'color': color,
+                                        'life': 1.0
+                                    })
+                            
+                            # Create scatter plot for particles
+                            particles = self.particles_data[panel_id]['particles']
+                            if particles:
+                                x_pos = [p['x'] for p in particles]
+                                y_pos = [p['y'] for p in particles]
+                                sizes = [p['size'] * p['life'] * 10 for p in particles]  # Size decreases with life
+                                colors = [p['color'] for p in particles]
+                                
+                                # Create scatter plot item
+                                scatter = pg.ScatterPlotItem()
+                                points = [{'pos': (x, y), 'size': s, 'brush': color} 
+                                         for x, y, s, color in zip(x_pos, y_pos, sizes, colors)]
+                                scatter.setData(points)
+                                
+                                # Add to plot
+                                waveform_plot.getPlotItem().addItem(scatter)
+                                panel['plots']['particle_main'] = scatter
+                        
                         # Check for amplitude-based alpha effect
-                        if hasattr(self, 'amplitude_alpha_check') and self.amplitude_alpha_check.isChecked():
+                        elif hasattr(self, 'amplitude_alpha_check') and self.amplitude_alpha_check.isChecked():
                             # Remove previous segment curves
                             for key in list(panel['plots'].keys()):
                                 if key.startswith('segment_'):
