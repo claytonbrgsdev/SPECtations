@@ -296,6 +296,26 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
         self.persistence_slider.valueChanged.connect(self.update_waveform_settings)
         waveform_layout.addRow("Persistence Decay:", self.persistence_slider)
         
+        # Amplitude-based alpha effect
+        self.amplitude_alpha_check = QtWidgets.QCheckBox("Amplitude-based Transparency")
+        self.amplitude_alpha_check.setChecked(False)
+        self.amplitude_alpha_check.stateChanged.connect(self.update_waveform_settings)
+        waveform_layout.addRow("", self.amplitude_alpha_check)
+        
+        # Amplitude alpha sensitivity
+        self.amplitude_alpha_slider = QtWidgets.QSlider(Qt.Horizontal)
+        self.amplitude_alpha_slider.setMinimum(1)
+        self.amplitude_alpha_slider.setMaximum(10)
+        self.amplitude_alpha_slider.setValue(5)
+        self.amplitude_alpha_slider.valueChanged.connect(self.update_waveform_settings)
+        waveform_layout.addRow("Alpha Sensitivity:", self.amplitude_alpha_slider)
+        
+        # Frequency-based alpha effect
+        self.frequency_alpha_check = QtWidgets.QCheckBox("Frequency-based Transparency")
+        self.frequency_alpha_check.setChecked(False)
+        self.frequency_alpha_check.stateChanged.connect(self.update_waveform_settings)
+        waveform_layout.addRow("", self.frequency_alpha_check)
+        
         # Add the waveform tab
         self.settings_tabs.addTab(waveform_tab, "Waveform")
         
@@ -696,7 +716,119 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
                     waveform_plot = panel['plots']["Waveform"]
                     if hasattr(waveform_plot, 'waveform_curve'):
                         waveform_curve = waveform_plot.waveform_curve
-                        waveform_curve.setData(waveform_data)
+                        
+                        # Check for amplitude-based alpha effect
+                        if hasattr(self, 'amplitude_alpha_check') and self.amplitude_alpha_check.isChecked():
+                            # Remove previous segment curves
+                            for key in list(panel['plots'].keys()):
+                                if key.startswith('segment_'):
+                                    waveform_plot.getPlotItem().removeItem(panel['plots'][key])
+                                    del panel['plots'][key]
+                            
+                            # Hide main waveform curve
+                            waveform_curve.hide()
+                            
+                            # Create segments with alpha based on amplitude
+                            max_amplitude = np.max(np.abs(waveform_data))
+                            if max_amplitude > 0:  # Avoid division by zero
+                                # Get sensitivity from slider
+                                sensitivity = self.amplitude_alpha_slider.value() / 5.0  # Range 0.2-2.0
+                                
+                                # Segment the waveform for varying alpha
+                                segment_size = 50  # Number of samples per segment
+                                segments = len(waveform_data) // segment_size
+                                
+                                for i in range(segments):
+                                    start_idx = i * segment_size
+                                    end_idx = min((i + 1) * segment_size, len(waveform_data))
+                                    segment_data = waveform_data[start_idx:end_idx]
+                                    segment_max = np.max(np.abs(segment_data))
+                                    
+                                    # Calculate alpha based on segment amplitude
+                                    segment_alpha = min(1.0, (segment_max / max_amplitude) ** sensitivity)
+                                    segment_alpha = max(0.2, segment_alpha)  # Ensure minimum visibility
+                                    
+                                    # Create color with adjusted alpha
+                                    segment_color = pg.mkColor(self.waveform_color)
+                                    segment_color.setAlphaF(segment_alpha)
+                                    segment_pen = pg.mkPen(segment_color, width=2)
+                                    
+                                    # Create segment indices for proper alignment
+                                    x_data = np.arange(start_idx, end_idx)
+                                    
+                                    # Plot the segment
+                                    segment_curve = waveform_plot.getPlotItem().plot(x_data, segment_data, pen=segment_pen)
+                                    panel['plots'][f'segment_{i}'] = segment_curve
+                        
+                        # Check for frequency-based alpha effect
+                        elif hasattr(self, 'frequency_alpha_check') and self.frequency_alpha_check.isChecked():
+                            # Remove previous frequency band curves
+                            for key in list(panel['plots'].keys()):
+                                if key.startswith('freq_band_'):
+                                    waveform_plot.getPlotItem().removeItem(panel['plots'][key])
+                                    del panel['plots'][key]
+                            
+                            # Hide main waveform curve
+                            waveform_curve.hide()
+                            
+                            # Perform FFT to get frequency content
+                            if len(waveform_data) > 0:
+                                fft_size = min(1024, len(waveform_data))
+                                fft_data = np.fft.rfft(waveform_data[:fft_size])
+                                fft_freq = np.fft.rfftfreq(fft_size, 1.0/self.audio_processor.sample_rate)
+                                fft_mag = np.abs(fft_data)
+                                
+                                # Define frequency bands
+                                bands = [
+                                    (0, 200, "Bass"),      # 0-200 Hz (Bass)
+                                    (200, 2000, "Mid"),   # 200-2000 Hz (Midrange)
+                                    (2000, 20000, "High") # 2000-20000 Hz (Treble)
+                                ]
+                                
+                                # Calculate energy in each band
+                                band_energy = []
+                                for low_freq, high_freq, _ in bands:
+                                    band_indices = np.where((fft_freq >= low_freq) & (fft_freq <= high_freq))[0]
+                                    if len(band_indices) > 0:
+                                        band_energy.append(np.sum(fft_mag[band_indices]) / len(band_indices))
+                                    else:
+                                        band_energy.append(0)
+                                
+                                # Normalize band energy
+                                total_energy = np.sum(band_energy) + 1e-10  # Avoid division by zero
+                                band_energy_norm = [e / total_energy for e in band_energy]
+                                
+                                # Create a curve for each frequency band
+                                for i, ((low_freq, high_freq, name), energy) in enumerate(zip(bands, band_energy_norm)):
+                                    # Alpha based on energy in this band
+                                    band_alpha = min(1.0, energy * 3)  # Scale for visibility
+                                    band_alpha = max(0.2, band_alpha)  # Ensure minimum visibility
+                                    
+                                    # Different color for each band
+                                    if name == "Bass":
+                                        band_color = pg.mkColor(255, 0, 0)  # Red for bass
+                                    elif name == "Mid":
+                                        band_color = pg.mkColor(0, 255, 0)  # Green for midrange
+                                    else:  # High
+                                        band_color = pg.mkColor(0, 0, 255)  # Blue for treble
+                                    
+                                    band_color.setAlphaF(band_alpha)
+                                    band_pen = pg.mkPen(band_color, width=2)
+                                    
+                                    # Plot the band
+                                    band_curve = waveform_plot.getPlotItem().plot(waveform_data, pen=band_pen)
+                                    panel['plots'][f'freq_band_{i}'] = band_curve
+                        else:
+                            # No special effect, update the main waveform curve
+                            # Remove any segment or frequency band curves
+                            for key in list(panel['plots'].keys()):
+                                if key.startswith('segment_') or key.startswith('freq_band_'):
+                                    waveform_plot.getPlotItem().removeItem(panel['plots'][key])
+                                    del panel['plots'][key]
+                            
+                            # Show and update the main waveform curve
+                            waveform_curve.show()
+                            waveform_curve.setData(waveform_data)
                         
                         # Update peak hold
                         if self.peak_hold_check.isChecked():
