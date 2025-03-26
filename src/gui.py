@@ -34,7 +34,8 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
         
         # State tracking
         self.is_capturing = False
-        self.presets_dir = os.path.expanduser("~/Documents/Spectograma/presets")
+        # Use the presets directory in the project root
+        self.presets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "presets")
         
         # Ensure presets directory exists
         os.makedirs(self.presets_dir, exist_ok=True)
