@@ -94,6 +94,11 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
         # Slow down the update rate for more readable waveform movement
         self.update_timer.start(1000 // 15)  # 15 FPS updates (slower than original 30 FPS)
         
+        # Add separate timer for particle animations to ensure smooth updates
+        self.particles_timer = QTimer()
+        self.particles_timer.timeout.connect(self.update_particles)
+        self.particles_timer.start(16)  # ~60fps for smooth animation
+        
         # For status tracking
         self.is_capturing = False
         self.is_recording = False
@@ -323,7 +328,7 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
         
         # Particles visualization effect
         self.particles_check = QtWidgets.QCheckBox("Particles Visualization")
-        self.particles_check.setChecked(False)
+        self.particles_check.setChecked(True)  # Start with particles enabled
         self.particles_check.stateChanged.connect(self.update_waveform_settings)
         waveform_layout.addRow("", self.particles_check)
         
@@ -695,6 +700,110 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
             self.statusBar().showMessage("Capture stopped")
             self.is_capturing = False
     
+    def update_particles(self):
+        """Update particle animations independent of audio data for smoother animation."""
+        if not self.is_capturing:
+            return
+            
+        # Only process if we have active particles
+        if not hasattr(self, 'particles_check') or not self.particles_check.isChecked():
+            return
+            
+        # Display a message on first call to confirm this method is being called
+        if not hasattr(self, '_particles_message_shown'):
+            print("Particles animation timer is running")
+            self._particles_message_shown = True
+            
+        current_time = time.time()
+        particle_speed = self.particles_speed_slider.value() / 5.0 if hasattr(self, 'particles_speed_slider') else 1.0
+        
+        # Update each panel with particles
+        for panel in self.viz_panels:
+            panel_id = str(id(panel))
+            if panel_id in self.particles_data and self.particles_data[panel_id]['particles']:
+                # Get particles data
+                particles = self.particles_data[panel_id]['particles']
+                dt = current_time - self.particles_data[panel_id]['last_update']
+                self.particles_data[panel_id]['last_update'] = current_time
+                
+                # Skip if dt is too large (application was paused)
+                if dt > 0.1:
+                    dt = 0.016  # Default to 16ms
+                
+                # Update particle positions
+                particles_to_remove = []
+                for i, particle in enumerate(particles):
+                    # Update position
+                    particle['x'] += particle['vx'] * 50 * dt * particle_speed
+                    particle['y'] += particle['vy'] * 50 * dt * particle_speed
+                    
+                    # Add some turbulence
+                    particle['vx'] += (np.random.random() - 0.5) * 0.2 * particle_speed
+                    particle['vy'] += (np.random.random() - 0.5) * 0.2 * particle_speed
+                    
+                    # Limit velocity
+                    max_vel = 5 * particle_speed
+                    particle['vx'] = max(-max_vel, min(max_vel, particle['vx']))
+                    particle['vy'] = max(-max_vel, min(max_vel, particle['vy']))
+                    
+                    # Decrease life
+                    particle['life'] -= 0.005 * particle_speed
+                    
+                    # Remove dead particles
+                    if particle['life'] <= 0:
+                        particles_to_remove.append(i)
+                    # Also remove if out of bounds
+                    elif abs(particle['y']) > 1.0:
+                        particles_to_remove.append(i)
+                
+                # Remove dead particles
+                for i in sorted(particles_to_remove, reverse=True):
+                    if i < len(particles):  # Safety check
+                        del particles[i]
+                
+                # Get waveform plot
+                if 'Waveform' in panel['plots']:
+                    waveform_plot = panel['plots']['Waveform']
+                    
+                    # Create new scatter plot
+                    if 'particle_main' in panel['plots']:
+                        # Remove old scatter plot
+                        waveform_plot.getPlotItem().removeItem(panel['plots']['particle_main'])
+                        
+                        if particles:  # Only recreate if we have particles
+                            # Extract particle data
+                            x_pos = [p['x'] for p in particles]
+                            y_pos = [p['y'] for p in particles]
+                            sizes = [p['size'] * p['life'] * 10 for p in particles]
+                            colors = [p['color'] for p in particles]
+                            
+                            # Create new scatter plot with updated positions
+                            scatter = pg.ScatterPlotItem()
+                            
+                            # Create points with large sizes and bright colors
+                            points = []
+                            for x, y, s, color in zip(x_pos, y_pos, sizes, colors):
+                                # Make particles much bigger
+                                size = s * 8
+                                
+                                # Create a bright color
+                                bright_color = pg.mkColor('w')
+                                bright_color.setHsvF(color.hsvHueF(), 1.0, 1.0, 0.8)
+                                
+                                # Add point
+                                points.append({
+                                    'pos': (x, y),
+                                    'size': size,
+                                    'brush': bright_color,
+                                    'pen': pg.mkPen(width=2, color=bright_color)
+                                })
+                            
+                            scatter.setData(points)
+                            
+                            # Add to plot
+                            waveform_plot.getPlotItem().addItem(scatter)
+                            panel['plots']['particle_main'] = scatter
+    
     def update_timer_event(self):
         """Update timer event handler - called at regular intervals to update visualizations."""
         if not self.is_capturing:
@@ -746,6 +855,7 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
                         
                         # Check for particles visualization effect
                         if hasattr(self, 'particles_check') and self.particles_check.isChecked():
+                            print("Particles visualization enabled")
                             # Remove previous particle plots
                             for key in list(panel['plots'].keys()):
                                 if key.startswith('particle_'):
@@ -855,17 +965,36 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
                             
                             # Create scatter plot for particles
                             particles = self.particles_data[panel_id]['particles']
+                            print(f"Number of particles: {len(particles)}")
                             if particles:
                                 x_pos = [p['x'] for p in particles]
                                 y_pos = [p['y'] for p in particles]
                                 sizes = [p['size'] * p['life'] * 10 for p in particles]  # Size decreases with life
                                 colors = [p['color'] for p in particles]
                                 
-                                # Create scatter plot item
+                                # Create scatter plot item - use much larger particles with bright colors
                                 scatter = pg.ScatterPlotItem()
-                                points = [{'pos': (x, y), 'size': s, 'brush': color} 
-                                         for x, y, s, color in zip(x_pos, y_pos, sizes, colors)]
+                                
+                                # Create points with much larger sizes and brighter colors
+                                points = []
+                                for x, y, s, color in zip(x_pos, y_pos, sizes, colors):
+                                    # Make particles much bigger
+                                    size = s * 8  # Larger size multiplier
+                                    
+                                    # Create a bright brush with full opacity
+                                    bright_color = pg.mkColor('w')  # Start with white
+                                    bright_color.setHsvF(color.hsvHueF(), 1.0, 1.0, 0.8)  # Full saturation and value
+                                    
+                                    # Add point with outline
+                                    points.append({
+                                        'pos': (x, y),
+                                        'size': size,
+                                        'brush': bright_color,
+                                        'pen': pg.mkPen(width=2, color=bright_color)  # Thicker outline
+                                    })
+                                
                                 scatter.setData(points)
+                                print(f"Created scatter plot with {len(points)} points")
                                 
                                 # Add to plot
                                 waveform_plot.getPlotItem().addItem(scatter)
