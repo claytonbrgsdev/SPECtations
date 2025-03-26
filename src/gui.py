@@ -1452,8 +1452,18 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
         # Save to file
         preset_path = os.path.join(self.presets_dir, f"{preset_name}.json")
         
-        with open(preset_path, 'w') as f:
-            json.dump(preset_data, f, indent=4)
+        # Print debugging information
+        print(f"Attempting to save preset to: {preset_path}")
+        print(f"Presets directory: {self.presets_dir}")
+        print(f"Directory exists: {os.path.exists(self.presets_dir)}")
+        
+        try:
+            with open(preset_path, 'w') as f:
+                json.dump(preset_data, f, indent=4)
+            print(f"Successfully saved preset to {preset_path}")
+        except Exception as e:
+            print(f"Error saving preset: {e}")
+            QtWidgets.QMessageBox.critical(self, "Save Error", f"Could not save preset: {e}")
         
         # Update preset list
         self.populate_preset_list()
