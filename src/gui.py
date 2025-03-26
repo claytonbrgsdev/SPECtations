@@ -1424,25 +1424,27 @@ class SpectogramaGUI(QtWidgets.QMainWindow):
         preset_data = {
             "waveform": {
                 "color": self.waveform_color.name(),
-                "width": self.waveform_width_slider.value(),
-                "fill": self.waveform_fill_check.isChecked(),
-                "amplitude_scale": self.amplitude_scale_slider.value()
+                "width": self.waveform_width_slider.value() if hasattr(self, 'waveform_width_slider') else 2,
+                "fill": self.waveform_fill_check.isChecked() if hasattr(self, 'waveform_fill_check') else False,
+                "amplitude_scale": self.amplitude_scale_slider.value() if hasattr(self, 'amplitude_scale_slider') else 1.0
             },
             "spectrogram": {
-                "colormap": self.colormap_combo.currentText(),
-                "min_db": self.min_db_spin.value(),
-                "max_db": self.max_db_spin.value(),
-                "min_freq": self.min_freq_spin.value(),
-                "max_freq": self.max_freq_spin.value(),
-                "time_range": self.time_range_slider.value()
+                "colormap": self.colormap_combo.currentText() if hasattr(self, 'colormap_combo') else "viridis",
+                "min_db": self.min_db_spin.value() if hasattr(self, 'min_db_spin') else -80,
+                "max_db": self.max_db_spin.value() if hasattr(self, 'max_db_spin') else 0,
+                "min_freq": self.min_freq_spin.value() if hasattr(self, 'min_freq_spin') else 20,
+                "max_freq": self.max_freq_spin.value() if hasattr(self, 'max_freq_spin') else 20000,
+                "time_range": self.time_range_slider.value() if hasattr(self, 'time_range_slider') else 100
             },
-            "bass_meter": {
-                "color": self.bass_meter_color.name(),
-                "min_freq": self.bass_min_freq_spin.value(),
-                "max_freq": self.bass_max_freq_spin.value(),
-                "sensitivity": self.bass_sensitivity_slider.value()
+            # New features section for particles and other effects
+            "effects": {
+                "particles": self.particles_check.isChecked() if hasattr(self, 'particles_check') else False,
+                "particles_density": self.particles_density_slider.value() if hasattr(self, 'particles_density_slider') else 50,
+                "particles_speed": self.particles_speed_slider.value() if hasattr(self, 'particles_speed_slider') else 5,
+                "amplitude_alpha": self.amplitude_alpha_check.isChecked() if hasattr(self, 'amplitude_alpha_check') else False,
+                "frequency_alpha": self.frequency_alpha_check.isChecked() if hasattr(self, 'frequency_alpha_check') else False
             },
-            "panel_count": self.panel_count_combo.currentIndex() + 1,
+            "panel_count": self.panel_count_combo.currentIndex() + 1 if hasattr(self, 'panel_count_combo') else 2,
             "panel_types": [panel['combo'].currentText() for panel in self.viz_panels]
         }
         
